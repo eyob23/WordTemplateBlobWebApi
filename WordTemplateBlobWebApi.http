@@ -1,0 +1,22 @@
+@WordTemplateBlobWebApi_HostAddress = https://localhost:5001
+
+POST {{WordTemplateBlobWebApi_HostAddress}}/api/documents/generate
+Content-Type: application/json
+
+{
+  "customerName": "Phoenix Mechanical CA",
+  "projectName": "HVAC Proposal",
+  "preparedBy": "Eyobe",
+  "items": [
+    {
+      "itemName": "AC Installation",
+      "itemDescription": "Install new high-efficiency AC system",
+      "amount": 4500
+    },
+    {
+      "itemName": "Duct Work",
+      "itemDescription": "Repair and seal duct system",
+      "amount": 1200
+    }
+  ]
+}
