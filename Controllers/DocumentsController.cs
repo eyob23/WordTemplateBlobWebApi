@@ -24,4 +24,14 @@ public sealed class DocumentsController : ControllerBase
         var response = await _documentGeneratorService.GenerateAsync(request, cancellationToken);
         return Ok(response);
     }
+
+    [HttpPost("generate-with-tags")]
+    [ProducesResponseType(typeof(GenerateDocumentResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<GenerateDocumentResponse>> GenerateWithTags(
+        [FromBody] GenerateDocumentWithTagsRequest request,
+        CancellationToken cancellationToken)
+    {
+        var response = await _documentGeneratorService.GenerateWithTagsAsync(request, cancellationToken);
+        return Ok(response);
+    }
 }

@@ -3,12 +3,42 @@
 ASP.NET Core Web API sample that:
 
 - Downloads a Word `.docx` template from Azure Blob Storage
-- Replaces placeholders like `{{CustomerName}}`
-- Clones a formatted table row for line items
-- Applies example bold formatting
+- Supports placeholder replacement (`{{CustomerName}}`) and bookmark/tag replacement
+- Clones a formatted table row for line items (for both approaches)
 - Uploads the generated Word document back to Azure Blob Storage
 
-## Placeholder template
+## Endpoints
+
+- `POST /api/documents/generate`
+  Uses placeholder-based replacement (`{{CustomerName}}`, `{{ItemName}}`, etc.).
+- `POST /api/documents/generate-with-tags`
+  Uses bookmark/tag replacement with a generic key/value payload.
+
+## Bookmark/tag template (recommended)
+
+Create a Word file named `template.docx`.
+
+Add bookmarks for header fields, for example:
+
+```text
+CustomerName
+ProjectName
+PreparedBy
+GeneratedDate
+```
+
+Add a table with a header row and one template row.
+Inside the template row, add bookmarks for item fields, for example:
+
+```text
+ItemName
+ItemDescription
+ItemAmount
+```
+
+Format the template row however you want in Word. The code clones that row for each item object in the request.
+
+## Placeholder template (legacy)
 
 Create a Word file named `proposal-template.docx`.
 
@@ -41,7 +71,7 @@ generated-documents
 Upload your template to:
 
 ```text
-word-templates/proposal-template.docx
+word-templates/template.docx
 ```
 
 ## Configuration
@@ -54,7 +84,7 @@ Update `appsettings.json`:
     "AccountUrl": "https://wordtemplates.blob.core.windows.net",
     "TemplateContainer": "word-templates",
     "OutputContainer": "generated-documents",
-    "TemplateBlobName": "proposal-template.docx"
+    "TemplateBlobName": "template.docx"
   }
 }
 ```
@@ -78,18 +108,47 @@ For Azure App Service or Azure Functions, enable managed identity and grant it t
 ```bash
 cd WordTemplateBlobWebApi
 dotnet restore
-dotnet run
+ASPNETCORE_ENVIRONMENT=Development dotnet run
 ```
 
 Open Swagger:
 
 ```text
-https://localhost:5001/swagger
+http://localhost:5000/swagger/index.html
 ```
 
 or use the HTTP file in the project.
 
-## Test request
+## Test request (bookmark/tag endpoint)
+
+Use with `POST /api/documents/generate-with-tags`:
+
+```json
+{
+  "tags": {
+    "CustomerName": "Phoenix Mechanical CA",
+    "ProjectName": "HVAC Proposal",
+    "PreparedBy": "Eyobe",
+    "GeneratedDate": "2026-05-14"
+  },
+  "items": [
+    {
+      "ItemName": "AC Installation",
+      "ItemDescription": "Install new high-efficiency AC system",
+      "ItemAmount": "$4,500"
+    },
+    {
+      "ItemName": "Duct Work",
+      "ItemDescription": "Repair and seal duct system",
+      "ItemAmount": "$1,200"
+    }
+  ]
+}
+```
+
+## Test request (placeholder endpoint)
+
+Use with `POST /api/documents/generate`:
 
 ```json
 {
@@ -113,4 +172,4 @@ or use the HTTP file in the project.
 
 ## Important production note
 
-Plain text placeholders can sometimes be split across multiple Word XML runs if you edit the text heavily in Microsoft Word. For production templates, keep placeholders typed in one pass, or use content controls/bookmarks for more reliable replacement.
+Plain text placeholders can be split across multiple Word XML runs if edited heavily in Microsoft Word. For production templates, bookmark/tag replacement is usually more reliable.
