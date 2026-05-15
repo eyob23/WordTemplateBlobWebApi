@@ -84,15 +84,18 @@ This generates the blank template and uploads it to `word-templates/sdt-template
 
 ### Step 2 — Generate documents
 
-**Request body** (same schema as `generate`):
+**Request body** (key/value schema):
 ```json
 {
-  "customerName": "Northwind Traders",
-  "projectName": "ERP Modernization",
-  "preparedBy": "Enterprise Solutions Team",
+  "tags": {
+    "CustomerName": "Northwind Traders",
+    "ProjectName": "ERP Modernization",
+    "PreparedBy": "Enterprise Solutions Team",
+    "GeneratedDate": "2026-05-15"
+  },
   "items": [
-    { "itemName": "Requirements Gathering", "itemDescription": "Gap analysis", "amount": 8500 },
-    { "itemName": "System Architecture", "itemDescription": "Technical blueprint", "amount": 15000 }
+    { "ItemName": "Requirements Gathering", "ItemDescription": "Gap analysis", "ItemAmount": "8500" },
+    { "ItemName": "System Architecture", "ItemDescription": "Technical blueprint", "ItemAmount": "15000" }
   ]
 }
 ```
@@ -128,6 +131,20 @@ Upload your placeholder template to `word-templates/template.docx` (or call `POS
 }
 ```
 
+### Endpoint to template mapping
+
+- `POST /api/documents/generate` and `POST /api/documents/generate-with-tags` use `TemplateBlobName`.
+- `POST /api/documents/generate-with-content-controls` uses `SdtTemplateBlobName`.
+
+If you run all three endpoints in the same environment, keep both blob names configured and make sure each template exists in the template container.
+
+### Current local defaults in this repo
+
+- `appsettings.Development.json` sets `TemplateBlobName` to `template.docx`.
+- `appsettings.json` currently sets `TemplateBlobName` and `SdtTemplateBlobName` to `sdt-template.docx`.
+
+For placeholder/tag flows in non-development environments, set `TemplateBlobName` back to a placeholder template (for example `template.docx`).
+
 ---
 
 ## Authentication
@@ -154,7 +171,7 @@ ASPNETCORE_ENVIRONMENT=Development dotnet run
 Open Swagger:
 
 ```text
-http://localhost:5000/swagger/index.html
+https://localhost:5001/swagger/index.html
 ```
 
 or use the HTTP file in the project.
