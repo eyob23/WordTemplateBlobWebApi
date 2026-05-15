@@ -129,7 +129,7 @@ public sealed class DocumentGeneratorService : IDocumentGeneratorService
     }
 
     public async Task<GenerateDocumentResponse> GenerateWithSdtAsync(
-        GenerateDocumentRequest request,
+        GenerateDocumentWithTagsRequest request,
         CancellationToken cancellationToken = default)
     {
         ValidateOptions();
@@ -391,7 +391,7 @@ public sealed class DocumentGeneratorService : IDocumentGeneratorService
     // SDT (Content Control) population
     // -------------------------------------------------------------------------
 
-    private static void PopulateWordTemplateSdt(Stream documentStream, GenerateDocumentRequest request)
+    private static void PopulateWordTemplateSdt(Stream documentStream, GenerateDocumentWithTagsRequest request)
     {
         documentStream.Position = 0;
 
@@ -400,13 +400,7 @@ public sealed class DocumentGeneratorService : IDocumentGeneratorService
         var body = wordDoc.MainDocumentPart?.Document.Body
                    ?? throw new InvalidOperationException("Word document body was not found.");
 
-        var fieldValues = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["CustomerName"]  = request.CustomerName,
-            ["ProjectName"]   = request.ProjectName,
-            ["PreparedBy"]    = request.PreparedBy,
-            ["GeneratedDate"] = DateTime.UtcNow.ToString("yyyy-MM-dd")
-        };
+        var fieldValues = request.Tags;
 
         // Populate block-level content controls (SdtBlock)
         foreach (var sdt in body.Descendants<SdtBlock>().ToList())
@@ -430,18 +424,25 @@ public sealed class DocumentGeneratorService : IDocumentGeneratorService
         wordDoc.MainDocumentPart!.Document.Save();
     }
 
-    private static void PopulateSdtTableRows(Body body, IReadOnlyCollection<DocumentLineItem> items)
+    private static void PopulateSdtTableRows(Body body, IReadOnlyCollection<Dictionary<string, string>> items)
     {
+        if (items.Count == 0)
+            return;
+
+        var firstItemKeys = items.First().Keys.ToHashSet(StringComparer.Ordinal);
+
         foreach (var table in body.Descendants<Table>().ToList())
         {
-            // Find the template row — the one that contains SdtRun controls tagged with item field names
+            // Find the template row by matching SDT tags with keys from the first item payload.
             var templateRow = table
                 .Descendants<TableRow>()
                 .FirstOrDefault(row =>
                     row.Descendants<SdtRun>()
-                       .Any(sdt => sdt.SdtProperties?.GetFirstChild<Tag>()?.Val?.Value is "ItemName"
-                                                                                        or "ItemDescription"
-                                                                                        or "ItemAmount"));
+                       .Any(sdt =>
+                       {
+                           var tag = sdt.SdtProperties?.GetFirstChild<Tag>()?.Val?.Value;
+                           return tag is not null && firstItemKeys.Contains(tag);
+                       }));
 
             if (templateRow is null)
                 continue;
@@ -450,9 +451,10 @@ public sealed class DocumentGeneratorService : IDocumentGeneratorService
             {
                 var newRow = (TableRow)templateRow.CloneNode(true);
 
-                SetSdtRunText(newRow, "ItemName",        item.ItemName);
-                SetSdtRunText(newRow, "ItemDescription", item.ItemDescription);
-                SetSdtRunText(newRow, "ItemAmount",      item.Amount.ToString("C"));
+                foreach (var (key, value) in item)
+                {
+                    SetSdtRunText(newRow, key, value ?? string.Empty);
+                }
 
                 table.InsertBefore(newRow, templateRow);
             }

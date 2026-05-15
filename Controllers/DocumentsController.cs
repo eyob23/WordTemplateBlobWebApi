@@ -38,7 +38,7 @@ public sealed class DocumentsController : ControllerBase
     [HttpPost("generate-with-content-controls")]
     [ProducesResponseType(typeof(GenerateDocumentResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<GenerateDocumentResponse>> GenerateWithContentControls(
-        [FromBody] GenerateDocumentRequest request,
+        [FromBody] GenerateDocumentWithTagsRequest request,
         CancellationToken cancellationToken)
     {
         var response = await _documentGeneratorService.GenerateWithSdtAsync(request, cancellationToken);

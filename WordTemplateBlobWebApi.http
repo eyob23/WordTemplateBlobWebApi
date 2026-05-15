@@ -20,3 +20,28 @@ Content-Type: application/json
     }
   ]
 }
+
+### Generate document using content controls (SDT)
+POST {{WordTemplateBlobWebApi_HostAddress}}/api/documents/generate-with-content-controls
+Content-Type: application/json
+
+{
+  "tags": {
+    "CustomerName": "Phoenix Mechanical CA",
+    "ProjectName": "HVAC Proposal",
+    "PreparedBy": "Eyobe",
+    "GeneratedDate": "2026-05-15"
+  },
+  "items": [
+    {
+      "ItemName": "AC Installation",
+      "ItemDescription": "Install new high-efficiency AC system",
+      "ItemAmount": "4500"
+    },
+    {
+      "ItemName": "Duct Work",
+      "ItemDescription": "Repair and seal duct system",
+      "ItemAmount": "1200"
+    }
+  ]
+}
