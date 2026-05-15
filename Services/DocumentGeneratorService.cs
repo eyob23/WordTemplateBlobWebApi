@@ -6,8 +6,7 @@ using DocumentFormat.OpenXml.Wordprocessing;
 using Microsoft.Extensions.Options;
 using WordTemplateBlobWebApi.Models;
 using WordTemplateBlobWebApi.Options;
-using BookmarkStart = DocumentFormat.OpenXml.Wordprocessing.BookmarkStart;
-using BookmarkEnd = DocumentFormat.OpenXml.Wordprocessing.BookmarkEnd;
+using WordTemplateBlobWebApi.Utilities;
 
 namespace WordTemplateBlobWebApi.Services;
 
@@ -129,6 +128,60 @@ public sealed class DocumentGeneratorService : IDocumentGeneratorService
         };
     }
 
+    public async Task<GenerateDocumentResponse> GenerateWithSdtAsync(
+        GenerateDocumentRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateOptions();
+
+        if (string.IsNullOrWhiteSpace(_options.SdtTemplateBlobName))
+            throw new InvalidOperationException("AzureStorage:SdtTemplateBlobName is required.");
+
+        var templateContainer = _blobServiceClient.GetBlobContainerClient(_options.TemplateContainer);
+        var outputContainer = _blobServiceClient.GetBlobContainerClient(_options.OutputContainer);
+
+        await outputContainer.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
+
+        var templateBlob = templateContainer.GetBlobClient(_options.SdtTemplateBlobName);
+
+        if (!await templateBlob.ExistsAsync(cancellationToken))
+        {
+            throw new FileNotFoundException(
+                $"SDT template blob '{_options.SdtTemplateBlobName}' was not found in container '{_options.TemplateContainer}'.");
+        }
+
+        await using var templateStream = new MemoryStream();
+        await templateBlob.DownloadToAsync(templateStream, cancellationToken);
+        templateStream.Position = 0;
+
+        await using var outputStream = new MemoryStream();
+        await templateStream.CopyToAsync(outputStream, cancellationToken);
+        outputStream.Position = 0;
+
+        PopulateWordTemplateSdt(outputStream, request);
+        outputStream.Position = 0;
+
+        var outputBlobName = $"generated/proposal-sdt-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.docx";
+        var outputBlob = outputContainer.GetBlobClient(outputBlobName);
+
+        await outputBlob.UploadAsync(
+            outputStream,
+            new BlobHttpHeaders
+            {
+                ContentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            },
+            cancellationToken: cancellationToken);
+
+        _logger.LogInformation("Generated SDT document uploaded to blob {BlobName}", outputBlobName);
+
+        return new GenerateDocumentResponse
+        {
+            Message = "Document generated successfully using content controls.",
+            BlobName = outputBlobName,
+            BlobUrl = outputBlob.Uri.ToString()
+        };
+    }
+
     private void ValidateOptions()
     {
         if (string.IsNullOrWhiteSpace(_options.TemplateContainer))
@@ -241,90 +294,41 @@ public sealed class DocumentGeneratorService : IDocumentGeneratorService
         var mainPart = wordDoc.MainDocumentPart
                        ?? throw new InvalidOperationException("Word document main part was not found.");
 
-        var replacements = new Dictionary<string, string>(request.Tags, StringComparer.Ordinal);
+        var body = mainPart.Document.Body
+                   ?? throw new InvalidOperationException("Word document body was not found.");
 
-        // Replace bookmarks in the main document
-        ReplaceBookmarks(mainPart, replacements);
+        // Wrap each key with {{ }} to match the {{Placeholder}} text format in the template
+        var textReplacements = request.Tags.ToDictionary(
+            kvp => $"{{{{{kvp.Key}}}}}",
+            kvp => kvp.Value ?? string.Empty,
+            StringComparer.Ordinal);
+
+        ReplaceTextInElement(body, textReplacements);
 
         if (request.Items.Count > 0)
         {
-            ReplaceTableRowsWithTagItems(mainPart.Document.Body!, request.Items);
+            ReplaceTableRowsWithDictItems(body, request.Items);
         }
 
         mainPart.Document.Save();
     }
 
-    private static void ReplaceBookmarks(MainDocumentPart mainPart, Dictionary<string, string> replacements)
-    {
-        var body = mainPart.Document.Body;
-
-        foreach (var kvp in replacements)
-        {
-            ReplaceBookmarkContent(body!, kvp.Key, kvp.Value ?? string.Empty);
-        }
-    }
-
-    private static void ReplaceBookmarkContent(OpenXmlElement element, string bookmarkName, string replacementText)
-    {
-        // Find BookmarkStart and BookmarkEnd elements
-        var bookmarkStart = element
-            .Descendants<BookmarkStart>()
-            .FirstOrDefault(b => b.Name == bookmarkName);
-
-        if (bookmarkStart is null)
-            return;
-
-        // Find the corresponding BookmarkEnd
-        var bookmarkEnd = element
-            .Descendants<BookmarkEnd>()
-            .FirstOrDefault(b => b.Id == bookmarkStart.Id);
-
-        if (bookmarkEnd is null)
-            return;
-
-        // Remove existing content between bookmark start and end
-        var nodesToRemove = new List<OpenXmlElement>();
-        var currentNode = bookmarkStart.NextSibling();
-
-        while (currentNode is not null && currentNode != bookmarkEnd)
-        {
-            if (currentNode is Run || currentNode is Paragraph)
-            {
-                nodesToRemove.Add(currentNode);
-            }
-            currentNode = currentNode.NextSibling();
-        }
-
-        // Remove the collected nodes
-        foreach (var node in nodesToRemove)
-        {
-            node.Remove();
-        }
-
-        // Create and insert new Run with the replacement text
-        var newRun = new Run(new Text(replacementText));
-
-        // Insert the new run after the bookmark start
-        bookmarkStart.InsertAfterSelf(newRun);
-    }
-
-    private static void ReplaceTableRowsWithTagItems(Body body, IReadOnlyCollection<Dictionary<string, string>> items)
+    private static void ReplaceTableRowsWithDictItems(Body body, IReadOnlyCollection<Dictionary<string, string>> items)
     {
         if (items.Count == 0)
             return;
 
-        var itemKeys = items
-            .SelectMany(item => item.Keys)
-            .ToHashSet(StringComparer.Ordinal);
+        // Find the template row by looking for any {{key}} placeholder from the first item
+        var firstItemPlaceholders = items.First().Keys
+            .Select(k => $"{{{{{k}}}}}")
+            .ToList();
 
-        var tables = body.Descendants<Table>();
-
-        foreach (var table in tables)
+        foreach (var table in body.Descendants<Table>().ToList())
         {
             var templateRow = table
                 .Descendants<TableRow>()
-                .FirstOrDefault(row =>
-                    row.Descendants<BookmarkStart>().Any(b => b.Name?.Value is string name && itemKeys.Contains(name)));
+                .FirstOrDefault(row => firstItemPlaceholders.Any(placeholder =>
+                    row.InnerText.Contains(placeholder, StringComparison.OrdinalIgnoreCase)));
 
             if (templateRow is null)
                 continue;
@@ -333,16 +337,144 @@ public sealed class DocumentGeneratorService : IDocumentGeneratorService
             {
                 var newRow = (TableRow)templateRow.CloneNode(true);
 
-                foreach (var entry in item)
+                var rowReplacements = item.ToDictionary(
+                    kvp => $"{{{{{kvp.Key}}}}}",
+                    kvp => kvp.Value ?? string.Empty,
+                    StringComparer.Ordinal);
+
+                ReplaceTextInElement(newRow, rowReplacements);
+                table.InsertBefore(newRow, templateRow);
+            }
+
+            templateRow.Remove();
+            break; // only process the first matching table
+        }
+    }
+
+    public async Task<string> UploadSdtTemplateAsync(CancellationToken cancellationToken = default)
+    {
+        ValidateOptions();
+
+        if (string.IsNullOrWhiteSpace(_options.SdtTemplateBlobName))
+            throw new InvalidOperationException("AzureStorage:SdtTemplateBlobName is required.");
+
+        var templateContainer = _blobServiceClient.GetBlobContainerClient(_options.TemplateContainer);
+        await templateContainer.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
+
+        var tempPath = Path.Combine(Path.GetTempPath(), $"sdt-template-{Guid.NewGuid():N}.docx");
+        try
+        {
+            WordTemplateGeneratorSdt.GenerateTemplate(tempPath);
+
+            await using var stream = new FileStream(tempPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var blobClient = templateContainer.GetBlobClient(_options.SdtTemplateBlobName);
+
+            await blobClient.UploadAsync(
+                stream,
+                new Azure.Storage.Blobs.Models.BlobHttpHeaders
                 {
-                    ReplaceBookmarkContent(newRow, entry.Key, entry.Value ?? string.Empty);
-                }
+                    ContentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                },
+                cancellationToken: cancellationToken);
+
+            _logger.LogInformation("SDT template uploaded to blob {BlobName}", _options.SdtTemplateBlobName);
+            return blobClient.Uri.ToString();
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+                File.Delete(tempPath);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // SDT (Content Control) population
+    // -------------------------------------------------------------------------
+
+    private static void PopulateWordTemplateSdt(Stream documentStream, GenerateDocumentRequest request)
+    {
+        documentStream.Position = 0;
+
+        using var wordDoc = WordprocessingDocument.Open(documentStream, true);
+
+        var body = wordDoc.MainDocumentPart?.Document.Body
+                   ?? throw new InvalidOperationException("Word document body was not found.");
+
+        var fieldValues = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["CustomerName"]  = request.CustomerName,
+            ["ProjectName"]   = request.ProjectName,
+            ["PreparedBy"]    = request.PreparedBy,
+            ["GeneratedDate"] = DateTime.UtcNow.ToString("yyyy-MM-dd")
+        };
+
+        // Populate block-level content controls (SdtBlock)
+        foreach (var sdt in body.Descendants<SdtBlock>().ToList())
+        {
+            var tag = sdt.SdtProperties?.GetFirstChild<Tag>()?.Val?.Value;
+            if (tag is null || !fieldValues.TryGetValue(tag, out var value))
+                continue;
+
+            var textElement = sdt.Descendants<Text>().FirstOrDefault();
+            if (textElement is not null)
+                textElement.Text = value;
+
+            // Remove ShowingPlaceholder flag so it renders as real content
+            sdt.SdtProperties?.GetFirstChild<ShowingPlaceholder>()?.Remove();
+        }
+
+        // Populate table rows with inline content controls (SdtRun)
+        if (request.Items.Count > 0)
+            PopulateSdtTableRows(body, request.Items);
+
+        wordDoc.MainDocumentPart!.Document.Save();
+    }
+
+    private static void PopulateSdtTableRows(Body body, IReadOnlyCollection<DocumentLineItem> items)
+    {
+        foreach (var table in body.Descendants<Table>().ToList())
+        {
+            // Find the template row — the one that contains SdtRun controls tagged with item field names
+            var templateRow = table
+                .Descendants<TableRow>()
+                .FirstOrDefault(row =>
+                    row.Descendants<SdtRun>()
+                       .Any(sdt => sdt.SdtProperties?.GetFirstChild<Tag>()?.Val?.Value is "ItemName"
+                                                                                        or "ItemDescription"
+                                                                                        or "ItemAmount"));
+
+            if (templateRow is null)
+                continue;
+
+            foreach (var item in items)
+            {
+                var newRow = (TableRow)templateRow.CloneNode(true);
+
+                SetSdtRunText(newRow, "ItemName",        item.ItemName);
+                SetSdtRunText(newRow, "ItemDescription", item.ItemDescription);
+                SetSdtRunText(newRow, "ItemAmount",      item.Amount.ToString("C"));
 
                 table.InsertBefore(newRow, templateRow);
             }
 
             templateRow.Remove();
         }
+    }
+
+    private static void SetSdtRunText(OpenXmlElement element, string tag, string value)
+    {
+        var sdt = element
+            .Descendants<SdtRun>()
+            .FirstOrDefault(s => s.SdtProperties?.GetFirstChild<Tag>()?.Val?.Value == tag);
+
+        if (sdt is null)
+            return;
+
+        var text = sdt.Descendants<Text>().FirstOrDefault();
+        if (text is not null)
+            text.Text = value;
+
+        sdt.SdtProperties?.GetFirstChild<ShowingPlaceholder>()?.Remove();
     }
 
 }

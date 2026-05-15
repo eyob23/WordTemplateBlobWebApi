@@ -1,52 +1,27 @@
 # Word Template Blob Web API
 
-ASP.NET Core Web API sample that:
-
-- Downloads a Word `.docx` template from Azure Blob Storage
-- Supports placeholder replacement (`{{CustomerName}}`) and bookmark/tag replacement
-- Clones a formatted table row for line items (for both approaches)
-- Uploads the generated Word document back to Azure Blob Storage
+ASP.NET Core Web API that generates Word `.docx` documents by populating templates stored in Azure Blob Storage. Supports three approaches: placeholder text replacement, bookmark/tag replacement, and Word content controls (SDT).
 
 ## Endpoints
 
-- `POST /api/documents/generate`
-  Uses placeholder-based replacement (`{{CustomerName}}`, `{{ItemName}}`, etc.).
-- `POST /api/documents/generate-with-tags`
-  Uses bookmark/tag replacement with a generic key/value payload.
+| Method | Route | Description |
+|--------|-------|-------------|
+| `POST` | `/api/documents/generate` | Placeholder-based replacement (`{{CustomerName}}` etc.) |
+| `POST` | `/api/documents/generate-with-tags` | Generic key/value tag replacement (same `{{}}` format, flexible schema) |
+| `POST` | `/api/documents/generate-with-content-controls` | Word content control (SDT) replacement |
+| `POST` | `/api/documents/sdt-template/upload` | Generates and uploads the blank SDT template to blob storage |
 
-## Bookmark/tag template (recommended)
+---
 
-Create a Word file named `template.docx`.
+## Approach 1 — Placeholder replacement (`generate`)
 
-Add bookmarks for header fields, for example:
+Template file: `template.docx` (configured via `TemplateBlobName`)
 
-```text
-CustomerName
-ProjectName
-PreparedBy
-GeneratedDate
-```
-
-Add a table with a header row and one template row.
-Inside the template row, add bookmarks for item fields, for example:
-
-```text
-ItemName
-ItemDescription
-ItemAmount
-```
-
-Format the template row however you want in Word. The code clones that row for each item object in the request.
-
-## Placeholder template (legacy)
-
-Create a Word file named `proposal-template.docx`.
-
-Add normal placeholders:
+Use `{{Placeholder}}` text anywhere in the document:
 
 ```text
 Customer: {{CustomerName}}
-Project: {{ProjectName}}
+Project:  {{ProjectName}}
 Prepared By: {{PreparedBy}}
 Generated Date: {{GeneratedDate}}
 ```
@@ -55,49 +30,114 @@ Add a table with a header row and one template row:
 
 | Item | Description | Amount |
 |---|---|---|
-| {{ItemName}} | {{ItemDescription}} | {{ItemAmount}} |
+| `{{ItemName}}` | `{{ItemDescription}}` | `{{ItemAmount}}` |
 
-Format that template row however you want in Word. The code clones that row, so the generated rows keep the same formatting.
+**Request body:**
+```json
+{
+  "customerName": "Acme Corp",
+  "projectName": "Cloud Migration",
+  "preparedBy": "Sales Team",
+  "items": [
+    { "itemName": "Discovery", "itemDescription": "Initial analysis", "amount": 5000 }
+  ]
+}
+```
+
+---
+
+## Approach 2 — Tag replacement (`generate-with-tags`)
+
+Uses the same `template.docx` and `{{}}` placeholder format as approach 1, but accepts a generic key/value payload — useful when field names vary per request.
+
+**Request body:**
+```json
+{
+  "tags": {
+    "CustomerName": "Northwind Traders",
+    "ProjectName": "ERP Modernization",
+    "PreparedBy": "Enterprise Solutions Team",
+    "GeneratedDate": "2026-05-15"
+  },
+  "items": [
+    { "ItemName": "Requirements Gathering", "ItemDescription": "Gap analysis", "ItemAmount": "8500" },
+    { "ItemName": "System Architecture", "ItemDescription": "Technical blueprint", "ItemAmount": "15000" }
+  ]
+}
+```
+
+Tag keys are automatically wrapped as `{{Key}}` before matching, so `"CustomerName"` replaces `{{CustomerName}}` in the template.
+
+---
+
+## Approach 3 — Word content controls (`generate-with-content-controls`)
+
+Uses a separate SDT template (`sdt-template.docx`) with structured Word content controls. Content controls are visible and labelled in the Word editor.
+
+### Step 1 — Upload the SDT template (once)
+
+```bash
+POST /api/documents/sdt-template/upload
+```
+
+This generates the blank template and uploads it to `word-templates/sdt-template.docx`.
+
+### Step 2 — Generate documents
+
+**Request body** (same schema as `generate`):
+```json
+{
+  "customerName": "Northwind Traders",
+  "projectName": "ERP Modernization",
+  "preparedBy": "Enterprise Solutions Team",
+  "items": [
+    { "itemName": "Requirements Gathering", "itemDescription": "Gap analysis", "amount": 8500 },
+    { "itemName": "System Architecture", "itemDescription": "Technical blueprint", "amount": 15000 }
+  ]
+}
+```
+
+Content controls are matched by their `Tag` value (`CustomerName`, `ProjectName`, `PreparedBy`, `GeneratedDate`, `ItemName`, `ItemDescription`, `ItemAmount`).
+
+---
 
 ## Azure Blob Storage setup
 
 Create two containers:
 
 ```text
-word-templates
-generated-documents
+word-templates        ← templates live here
+generated-documents   ← generated files are written here
 ```
 
-Upload your template to:
+Upload your placeholder template to `word-templates/template.docx` (or call `POST /api/documents/sdt-template/upload` for the SDT template).
 
-```text
-word-templates/template.docx
-```
+---
 
 ## Configuration
-
-Update `appsettings.json`:
 
 ```json
 {
   "AzureStorage": {
-    "AccountUrl": "https://wordtemplates.blob.core.windows.net",
+    "AccountUrl": "https://<your-account>.blob.core.windows.net",
     "TemplateContainer": "word-templates",
     "OutputContainer": "generated-documents",
-    "TemplateBlobName": "template.docx"
+    "TemplateBlobName": "template.docx",
+    "SdtTemplateBlobName": "sdt-template.docx"
   }
 }
 ```
 
-## Local auth
+---
 
-This sample uses `DefaultAzureCredential`.
+## Authentication
 
-For local development:
+Uses `DefaultAzureCredential`. For local development:
 
 ```bash
 az login
 ```
+
 
 Your user needs Storage Blob Data Reader on the template container and Storage Blob Data Contributor on the output container.
 

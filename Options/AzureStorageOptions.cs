@@ -8,4 +8,5 @@ public sealed class AzureStorageOptions
     public string TemplateContainer { get; set; } = string.Empty;
     public string OutputContainer { get; set; } = string.Empty;
     public string TemplateBlobName { get; set; } = string.Empty;
+    public string SdtTemplateBlobName { get; set; } = string.Empty;
 }
